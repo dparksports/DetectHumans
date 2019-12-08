@@ -96,6 +96,11 @@ class ViewController: UIViewController, UIImagePickerControllerDelegate, UINavig
         prompt.addAction(albumsAction)
         prompt.addAction(cancelAction)
         
+        if let popoverController = prompt.popoverPresentationController {
+            popoverController.sourceView = self.view
+            popoverController.sourceRect = CGRect(x: self.view.bounds.midX, y: self.view.bounds.midY, width: 0, height: 0)
+            popoverController.permittedArrowDirections = []
+        }
         self.present(prompt, animated: true, completion: nil)
     }
     
@@ -305,7 +310,11 @@ class ViewController: UIViewController, UIImagePickerControllerDelegate, UINavig
         if self.faceSwitch.isOn {
             // Break rectangle & face landmark detection into 2 stages to have more fluid feedback in UI.
             requests.append(self.faceDetectionRequest)
-            requests.append(self.faceLandmarkRequest)
+            if #available(iOS 13.0, *) {
+                requests.append(self.humanDetectionRequest)
+            } else {
+                requests.append(self.faceLandmarkRequest)
+            }
         }
         if self.textSwitch.isOn {
             requests.append(self.textDetectionRequest)
@@ -330,6 +339,22 @@ class ViewController: UIViewController, UIImagePickerControllerDelegate, UINavig
                     return
             }
             self.draw(rectangles: results, onImageWithBounds: drawLayer.bounds)
+            drawLayer.setNeedsDisplay()
+        }
+    }
+
+    fileprivate func handleDetectedHumans(request: VNRequest?, error: Error?) {
+        if let nsError = error as NSError? {
+            self.presentAlert("Human Detection Error", error: nsError)
+            return
+        }
+        // Perform drawing on the main thread.
+        DispatchQueue.main.async {
+            guard let drawLayer = self.pathLayer,
+                let results = request?.results as? [VNDetectedObjectObservation] else {
+                    return
+            }
+            self.draw(humans: results, onImageWithBounds: drawLayer.bounds)
             drawLayer.setNeedsDisplay()
         }
     }
@@ -408,6 +433,8 @@ class ViewController: UIViewController, UIImagePickerControllerDelegate, UINavig
         return rectDetectRequest
     }()
     
+    @available(iOS 13.0, *)
+    lazy var humanDetectionRequest = VNDetectHumanRectanglesRequest(completionHandler: self.handleDetectedHumans)
     lazy var faceDetectionRequest = VNDetectFaceRectanglesRequest(completionHandler: self.handleDetectedFaces)
     lazy var faceLandmarkRequest = VNDetectFaceLandmarksRequest(completionHandler: self.handleDetectedFaceLandmarks)
     
@@ -480,6 +507,20 @@ class ViewController: UIViewController, UIImagePickerControllerDelegate, UINavig
             
             // Add to pathLayer on top of image.
             pathLayer?.addSublayer(rectLayer)
+        }
+        CATransaction.commit()
+    }
+
+    // Humans are cyan.
+    /// - Tag: DrawBoundingBox
+    fileprivate func draw(humans: [VNDetectedObjectObservation], onImageWithBounds bounds: CGRect) {
+        CATransaction.begin()
+        for observation in humans {
+            let box = boundingBox(forRegionOfInterest: observation.boundingBox, withinImageBounds: bounds)
+            let layer = shapeLayer(color: .cyan, frame: box)
+            
+            // Add to pathLayer on top of image.
+            pathLayer?.addSublayer(layer)
         }
         CATransaction.commit()
     }
